@@ -39,7 +39,7 @@ makefiles += \
   mk/disable-tests.mk
 endif
 
-OPTIMIZE = 1
+OPTIMIZE = 0
 
 ifeq ($(OPTIMIZE), 1)
   GLOBAL_CXXFLAGS += -O3 $(CXXLTO)
@@ -50,4 +50,4 @@ endif
 
 include mk/lib.mk
 
-GLOBAL_CXXFLAGS += -g -Wall -include config.h -std=c++2a -I src
+GLOBAL_CXXFLAGS += -ggdb -Wall -include config.h -std=c++2a -I src

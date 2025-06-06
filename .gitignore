@@ -1,3 +1,10 @@
+/.idea
+/.vscode
+/bin
+/etc
+/log.txt
+/build.sh
+
 Makefile.config
 perl/Makefile.config
 

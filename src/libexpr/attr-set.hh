@@ -117,13 +117,18 @@ public:
     /**
      * Returns the attributes in lexicographically sorted order.
      */
-    std::vector<const Attr *> lexicographicOrder(const SymbolTable & symbols) const
+    std::vector<std::unique_ptr<Attr>> lexicographicOrder(const SymbolTable & symbols) const
     {
-        std::vector<const Attr *> res;
+        std::vector<std::unique_ptr<Attr>> res;
         res.reserve(size_);
+
         for (size_t n = 0; n < size_; n++)
-            res.emplace_back(&attrDiskCache_[range_start_ + n]);
-        std::sort(res.begin(), res.end(), [&](const Attr * a, const Attr * b) {
+        {
+            auto r = this->attrDiskCache_[range_start_ + n];
+            auto e = std::unique_ptr<Attr>(new Attr(r.name, r.value, r.pos));
+            res.emplace_back(std::move(e));
+        }
+        std::sort(res.begin(), res.end(), [&](const std::unique_ptr<Attr>& a, const std::unique_ptr<Attr>& b) {
             std::string_view sa = symbols[a->name], sb = symbols[b->name];
             return sa < sb;
         });

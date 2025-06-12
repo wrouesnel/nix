@@ -182,7 +182,7 @@ namespace nix {
     TEST_F(PrimOpTest, removeAttrsRetains) {
         auto v = eval("builtins.removeAttrs { x = 1; y = 2; } [\"x\"]");
         ASSERT_THAT(v, IsAttrsOfSize(1));
-        ASSERT_NE(v.attrs->find(createSymbol("y")), nullptr);
+        ASSERT_NE(v.attrs->find(createSymbol("y")), v.attrs->end());
     }
 
     TEST_F(PrimOpTest, listToAttrsEmptyList) {
@@ -200,7 +200,7 @@ namespace nix {
         auto v = eval("builtins.listToAttrs [ { name = \"key\"; value = 123; } ]");
         ASSERT_THAT(v, IsAttrsOfSize(1));
         auto key = v.attrs->find(createSymbol("key"));
-        ASSERT_NE(key, nullptr);
+        ASSERT_NE(key, v.attrs->end());
         ASSERT_THAT(*key->value, IsIntEq(123));
     }
 
@@ -208,7 +208,7 @@ namespace nix {
         auto v = eval("builtins.intersectAttrs { a = 1; b = 2; } { b = 3; c = 4; }");
         ASSERT_THAT(v, IsAttrsOfSize(1));
         auto b = v.attrs->find(createSymbol("b"));
-        ASSERT_NE(b, nullptr);
+        ASSERT_NE(b, v.attrs->end());
         ASSERT_THAT(*b->value, IsIntEq(3));
     }
 
@@ -224,11 +224,11 @@ namespace nix {
         ASSERT_THAT(v, IsAttrsOfSize(2));
 
         auto x = v.attrs->find(createSymbol("x"));
-        ASSERT_NE(x, nullptr);
+        ASSERT_NE(x, v.attrs->end());
         ASSERT_THAT(*x->value, IsFalse());
 
         auto y = v.attrs->find(createSymbol("y"));
-        ASSERT_NE(y, nullptr);
+        ASSERT_NE(y, v.attrs->end());
         ASSERT_THAT(*y->value, IsTrue());
     }
 
@@ -237,13 +237,13 @@ namespace nix {
         ASSERT_THAT(v, IsAttrsOfSize(2));
 
         auto a = v.attrs->find(createSymbol("a"));
-        ASSERT_NE(a, nullptr);
+        ASSERT_NE(a, v.attrs->end());
         ASSERT_THAT(*a->value, IsThunk());
         state.forceValue(*a->value, noPos);
         ASSERT_THAT(*a->value, IsIntEq(10));
 
         auto b = v.attrs->find(createSymbol("b"));
-        ASSERT_NE(b, nullptr);
+        ASSERT_NE(b, v.attrs->end());
         ASSERT_THAT(*b->value, IsThunk());
         state.forceValue(*b->value, noPos);
         ASSERT_THAT(*b->value, IsIntEq(20));
@@ -690,11 +690,11 @@ namespace nix {
         ASSERT_THAT(v, IsAttrsOfSize(2));
 
         auto name = v.attrs->find(createSymbol("name"));
-        ASSERT_TRUE(name);
+        ASSERT_TRUE(name != v.attrs->end());
         ASSERT_THAT(*name->value, IsStringEq(expectedName));
 
         auto version = v.attrs->find(createSymbol("version"));
-        ASSERT_TRUE(version);
+        ASSERT_TRUE(version != v.attrs->end());
         ASSERT_THAT(*version->value, IsStringEq(expectedVersion));
     }
 

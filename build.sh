@@ -10,4 +10,4 @@ done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 
 CFLAGS="-DDEBUG -ggdb -O0" CXXFLAGS="-DDEBUG -ggdb -O0" \
-  ./configure $configureFlags --prefix=$(pwd) --enable-gc --disable-shared
+  ./configure $configureFlags --prefix=$(pwd) --enable-gc --disable-shared "$@"

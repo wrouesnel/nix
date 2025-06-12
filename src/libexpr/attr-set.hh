@@ -39,17 +39,17 @@ private:
     size_t size_, capacity_;
     // cache management
     bigAttrCache& attrDiskCache_;
-    size_t range_start_, range_end_;
+    size_t range_start_;
 
     Bindings(size_t capacity, bigAttrCache& attrDiskCache) : size_(0), capacity_(capacity), attrDiskCache_(attrDiskCache)
     {
         // Allocate enough space in the vector cache for our items.
+        this->attrDiskCache_.reserve(capacity);
         range_start_ = this->attrDiskCache_.size();
         for (size_t i = 0; i < capacity; i++)
         {
             this->attrDiskCache_.push_back(Attr{});
         }
-        range_end_ = this->attrDiskCache_.size();
     }
     Bindings(const Bindings & bindings) = delete;
 
@@ -58,7 +58,7 @@ public:
 
     bool empty() const { return !size_; }
 
-    typedef Attr * iterator;
+    typedef bigAttrCache::iterator iterator;
 
     void push_back(const Attr & attr)
     {
@@ -71,20 +71,32 @@ public:
     {
         Attr key(name, 0);
         iterator i = std::lower_bound(begin(), end(), key);
-        if (i != end() && i->name == name) return i;
+        if (i != end() && i->name == name)
+        {
+            return i;
+        }
         return end();
     }
 
-    Attr * get(Symbol name)
+    iterator get(Symbol name)
     {
         Attr key(name, 0);
         iterator i = std::lower_bound(begin(), end(), key);
-        if (i != end() && i->name == name) return &*i;
-        return nullptr;
+        if (i != end() && i->name == name)
+        {
+            return i;
+        }
+        return end();
     }
 
-    iterator begin() { return &attrDiskCache_[range_start_]; }
-    iterator end() { return &attrDiskCache_[range_end_-1]; }
+    iterator begin()
+    {
+        return attrDiskCache_.begin() + range_start_;
+    }
+    iterator end()
+    {
+        return attrDiskCache_.end() + range_start_ + size_;
+    }
 
     Attr & operator[](size_t pos)
     {

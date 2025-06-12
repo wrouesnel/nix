@@ -18,10 +18,6 @@ static_assert(sizeof(Attr) == 2 * sizeof(uint32_t) + sizeof(Value *),
     "avoid introducing any padding into Attr if at all possible, and do not "
     "introduce new fields that need not be present for almost every instance.");
 
-// AttrCache is a stxxl backed master cache of ATTRs into which we allocate all the other attrs.
-// This is not production ready!
-// typedef stxxl::VECTOR_GENERATOR<Attr>::result AttrCache;
-
 /**
  * Bindings contains all the attributes of an attribute set. It is defined
  * by its size and its capacity, the capacity being the number of Attr
@@ -81,12 +77,6 @@ public:
     std::unique_ptr<Attr> get(Symbol name)
     {
         Attr key(name, 0);
-        // std::cout << "++ATTR" << "\n";
-        // for (auto i = begin(); i != end(); ++i)
-        // {
-        //     std::cout << i->name.id << " " << "\n";
-        // }
-        // std::cout << "--ATTR" << "\n";
         iterator i = std::lower_bound(begin(), end(), key);
         if (i != end() && i->name == name)
         {
@@ -105,9 +95,10 @@ public:
         return boost::make_iterator_range(attrDiskCache_.begin() + range_start_, attrDiskCache_.begin() + range_start_ + size_).end();
     }
 
-    Attr & operator[](size_t pos)
+    Attr operator[](size_t pos)
     {
-        return attrDiskCache_[range_start_ + pos];
+        auto a = attrDiskCache_[range_start_ + pos];
+        return Attr(a.name, a.value, a.pos) ;
     }
 
     void sort();

@@ -78,24 +78,31 @@ public:
         return end();
     }
 
-    iterator get(Symbol name)
+    std::unique_ptr<Attr> get(Symbol name)
     {
         Attr key(name, 0);
+        // std::cout << "++ATTR" << "\n";
+        // for (auto i = begin(); i != end(); ++i)
+        // {
+        //     std::cout << i->name.id << " " << "\n";
+        // }
+        // std::cout << "--ATTR" << "\n";
         iterator i = std::lower_bound(begin(), end(), key);
         if (i != end() && i->name == name)
         {
-            return i;
+            auto ret = std::unique_ptr<Attr>(new Attr(i->name, i->value, i->pos));
+            return ret;
         }
-        return end();
+        return nullptr;
     }
 
     iterator begin()
     {
-        return attrDiskCache_.begin() + range_start_;
+        return boost::make_iterator_range(attrDiskCache_.begin() + range_start_, attrDiskCache_.begin() + range_start_ + size_).begin();
     }
     iterator end()
     {
-        return attrDiskCache_.end() + range_start_ + size_;
+        return boost::make_iterator_range(attrDiskCache_.begin() + range_start_, attrDiskCache_.begin() + range_start_ + size_).end();
     }
 
     Attr & operator[](size_t pos)

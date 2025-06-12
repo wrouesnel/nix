@@ -117,7 +117,7 @@ struct CmdBundle : InstallableValueCommand
         auto outPathS = store->printStorePath(outPath);
 
         if (!outLink) {
-            auto * attr = vRes->attrs->get(evalState->sName);
+            auto attr = vRes->attrs->get(evalState->sName);
             if (!attr)
                 throw Error("attribute 'name' missing");
             outLink = evalState->forceStringNoCtx(*attr->value, attr->pos, "");

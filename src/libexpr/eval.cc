@@ -1528,7 +1528,7 @@ void EvalState::callFunction(Value & fun, size_t nrArgs, Value * * args, Value &
         }
     };
 
-    Attr * functor;
+    std::unique_ptr<Attr> functor;
 
     while (nrArgs > 0) {
 

@@ -502,7 +502,7 @@ EvalState::EvalState(
     , sPrefix(symbols.create("prefix"))
     , sOutputSpecified(symbols.create("outputSpecified"))
     , repair(NoRepair)
-    , emptyBindings(0)
+    , emptyBindings(0, this->attrDiskCache)
     , derivationInternal(rootPath(CanonPath("/builtin/derivation.nix")))
     , store(store)
     , buildStore(buildStore ? buildStore : store)
@@ -523,6 +523,8 @@ EvalState::EvalState(
     assert(gcInitialised);
 
     static_assert(sizeof(Env) <= 16, "environment must be <= 16 bytes");
+
+    this->attrDiskCache.allocate_page_cache();
 
     /* Initialise the Nix expression search path. */
     if (!evalSettings.pureEval) {

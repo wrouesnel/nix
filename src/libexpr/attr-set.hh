@@ -5,39 +5,22 @@
 #include "symbol-table.hh"
 
 #include <algorithm>
-#include <optional>
+
+#include "attr-cache.hh"
 
 namespace nix {
 
-
 class EvalState;
 struct Value;
-
-/**
- * Map one attribute name to its value.
- */
-struct Attr
-{
-    /* the placement of `name` and `pos` in this struct is important.
-       both of them are uint32 wrappers, they are next to each other
-       to make sure that Attr has no padding on 64 bit machines. that
-       way we keep Attr size at two words with no wasted space. */
-    Symbol name;
-    PosIdx pos;
-    Value * value;
-    Attr(Symbol name, Value * value, PosIdx pos = noPos)
-        : name(name), pos(pos), value(value) { };
-    Attr() { };
-    bool operator < (const Attr & a) const
-    {
-        return name < a.name;
-    }
-};
 
 static_assert(sizeof(Attr) == 2 * sizeof(uint32_t) + sizeof(Value *),
     "performance of the evaluator is highly sensitive to the size of Attr. "
     "avoid introducing any padding into Attr if at all possible, and do not "
     "introduce new fields that need not be present for almost every instance.");
+
+// AttrCache is a stxxl backed master cache of ATTRs into which we allocate all the other attrs.
+// This is not production ready!
+// typedef stxxl::VECTOR_GENERATOR<Attr>::result AttrCache;
 
 /**
  * Bindings contains all the attributes of an attribute set. It is defined
@@ -52,10 +35,22 @@ public:
     PosIdx pos;
 
 private:
+    // local capacity management
     size_t size_, capacity_;
-    Attr attrs[0];
+    // cache management
+    bigAttrCache& attrDiskCache_;
+    size_t range_start_, range_end_;
 
-    Bindings(size_t capacity) : size_(0), capacity_(capacity) { }
+    Bindings(size_t capacity, bigAttrCache& attrDiskCache) : size_(0), capacity_(capacity), attrDiskCache_(attrDiskCache)
+    {
+        // Allocate enough space in the vector cache for our items.
+        range_start_ = this->attrDiskCache_.size();
+        for (size_t i = 0; i < capacity; i++)
+        {
+            this->attrDiskCache_.push_back(Attr{});
+        }
+        range_end_ = this->attrDiskCache_.size();
+    }
     Bindings(const Bindings & bindings) = delete;
 
 public:
@@ -68,7 +63,8 @@ public:
     void push_back(const Attr & attr)
     {
         assert(size_ < capacity_);
-        attrs[size_++] = attr;
+        attrDiskCache_[range_start_ + size_] = attr;
+        size_++;
     }
 
     iterator find(Symbol name)
@@ -87,12 +83,12 @@ public:
         return nullptr;
     }
 
-    iterator begin() { return &attrs[0]; }
-    iterator end() { return &attrs[size_]; }
+    iterator begin() { return &attrDiskCache_[range_start_]; }
+    iterator end() { return &attrDiskCache_[range_end_-1]; }
 
     Attr & operator[](size_t pos)
     {
-        return attrs[pos];
+        return attrDiskCache_[range_start_ + pos];
     }
 
     void sort();
@@ -107,7 +103,7 @@ public:
         std::vector<const Attr *> res;
         res.reserve(size_);
         for (size_t n = 0; n < size_; n++)
-            res.emplace_back(&attrs[n]);
+            res.emplace_back(&attrDiskCache_[range_start_ + n]);
         std::sort(res.begin(), res.end(), [&](const Attr * a, const Attr * b) {
             std::string_view sa = symbols[a->name], sb = symbols[b->name];
             return sa < sb;

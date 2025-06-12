@@ -2,6 +2,7 @@
 ///@file
 
 #include "attr-set.hh"
+#include "attr-cache.hh"
 #include "types.hh"
 #include "value.hh"
 #include "nixexpr.hh"
@@ -179,12 +180,13 @@ class ErrorBuilder
         void debugThrow();
 };
 
-
 class EvalState : public std::enable_shared_from_this<EvalState>
 {
 public:
     SymbolTable symbols;
     PosTable positions;
+
+    bigAttrCache attrDiskCache;
 
     const Symbol sWith, sOutPath, sDrvPath, sType, sMeta, sName, sValue,
         sSystem, sOverrides, sOutputs, sOutputName, sIgnoreNulls,

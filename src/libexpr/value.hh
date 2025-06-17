@@ -13,14 +13,14 @@
 #include <gc/gc_allocator.h>
 #endif
 #include <nlohmann/json_fwd.hpp>
-#include <stxxl/bits/compat/type_traits.h>
 
+#include "attr-table.hh"
 #include "attr-set.hh"
+#include "value-table-types.hh"
 
 namespace nix {
 
 class BindingsBuilder;
-
 
 typedef enum {
     tInt = 1,
@@ -73,10 +73,6 @@ class StorePath;
 class Store;
 class EvalState;
 class XMLWriter;
-
-
-typedef int64_t NixInt;
-typedef double NixFloat;
 
 /**
  * External values must descend from ExternalValueBase, so that
@@ -134,24 +130,7 @@ class ExternalValueBase
 
 std::ostream & operator << (std::ostream & str, const ExternalValueBase & v);
 
-/**
- * ValueIdx is the unique identifier for a value in the lookup table. ValueIdx is mapped through the ValueTable
- * to the current actual value of the Value. This implements a copy on write scheme in the master value cache
- * which hopefully keeps in-use values local (and allows to update them since we can just extend the buffer).
- */
-typedef size_t ValueIdx;
-typedef size_t ValueOffset;
 
-#define DATA_NODE_BLOCK_SIZE (4096)
-#define DATA_LEAF_BLOCK_SIZE (4096)
-
-struct ValueIdxCompareLess
-{
-    bool operator () (const ValueIdx & a, const ValueIdx & b) const
-    { return a<b; }
-    static size_t max_value()
-    { return std::numeric_limits<ValueIdx>::max(); }
-};
 
 /**
  * Value holds the necessary references to work with a value stored in the value table.
@@ -292,65 +271,7 @@ public:
     };
 };
 
-/**
- * ValueTable centralizes the management of values, so they can be created and pageD out to disk backed
- * cache by STXXL. EvalState carries a ValueTable, which in turn keeps our memory usage under control by
- * allowing things to be paged to disk.
- */
-class ValueTable
-{
-private:
-    stxxl::map<ValueIdx,ValueOffset,ValueIdxCompareLess,DATA_NODE_BLOCK_SIZE,DATA_LEAF_BLOCK_SIZE> valuesMap;
-    stxxl::vector<Value> values;
 
-    ValueIdx nrValues;
-
-    // Write a new value to the map
-    ValueIdx writeValue(Value value);
-
-    // Get the next value index (for future thread safing)
-    ValueIdx getNextIndex();
-
-public:
-    ValueTable();
-    ~ValueTable();
-
-    ValueIdx mkInt(NixInt n);
-    ValueIdx mkBool(bool b);
-
-    ValueIdx mkString(const char * s, const char ** context = 0);
-    ValueIdx mkString(std::string_view s);
-    ValueIdx mkString(std::string_view s, const NixStringContext & context);
-    ValueIdx mkString(const Symbol & s);
-
-    ValueIdx mkPath(const SourcePath & path);
-
-    ValueIdx mkNull();
-
-    ValueIdx mkAttrs(Bindings * a);
-    // ValueIdx mkAttrs(BindingsBuilder & bindings);
-
-    ValueIdx mkList(size_t size);
-
-    ValueIdx mkThunk(Env * e, Expr * ex);
-    ValueIdx mkApp(ValueIdx l, ValueIdx r);
-    ValueIdx mkLambda(Env * e, ExprLambda * f);
-    ValueIdx mkBlackhole();
-    ValueIdx mkPrimOp(PrimOp * p);
-    ValueIdx mkPrimOpApp(ValueIdx l, ValueIdx r);
-    ValueIdx mkExternal(ExternalValueBase * e);
-    ValueIdx mkFloat(NixFloat n);
-
-    // Technically not needed because we no longer use GC.
-    ValueIdx ValueTable::clearValue(ValueIdx idx);
-
-    size_t size() const
-    {
-        return values.size();
-    }
-
-    size_t totalSize() const;
-};
 
 #if HAVE_BOEHMGC
 typedef std::vector<Value *, traceable_allocator<Value *>> ValueVector;

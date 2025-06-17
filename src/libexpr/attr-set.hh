@@ -1,88 +1,17 @@
 #pragma once
 ///@file
 
+#include "attr.hh"
 #include "nixexpr.hh"
 #include "symbol-table.hh"
 
 #include <algorithm>
-#include <optional>
 
 namespace nix {
 
 
 class EvalState;
-struct Value;
 
-/**
- * Map one attribute name to its value.
- */
-struct Attr
-{
-    /* the placement of `name` and `pos` in this struct is important.
-       both of them are uint32 wrappers, they are next to each other
-       to make sure that Attr has no padding on 64 bit machines. that
-       way we keep Attr size at two words with no wasted space. */
-    Symbol name;
-    PosIdx pos;
-    ValueIdx value;
-    Attr(Symbol name, ValueIdx value, PosIdx pos = noPos)
-        : name(name), pos(pos), value(value) { };
-    Attr() { };
-    bool operator < (const Attr & a) const
-    {
-        return name < a.name;
-    }
-};
-
-static_assert(sizeof(Attr) == 2 * sizeof(uint32_t) + sizeof(Value *),
-    "performance of the evaluator is highly sensitive to the size of Attr. "
-    "avoid introducing any padding into Attr if at all possible, and do not "
-    "introduce new fields that need not be present for almost every instance.");
-
-typedef size_t AttrIdx;
-
-/**
- * AttributesTable provides a master lookup table for attributes. This notably just means
- * storing them all in a big index vector on disk, so bindings can store vector ranges.
- * rather then lists of attributes.
- */
-class AttributesTable
-{
-private:
-    typedef stxxl::vector<Attr> AttributeCache;
-    AttributeCache attrs;
-public:
-    AttributesTable()
-    {
-        attrs.allocate_page_cache();
-    }
-    ~AttributesTable()
-    {
-        attrs.deallocate_page_cache();
-    }
-
-    ValueIdx create(std::unique_ptr<Attr> attr)
-    {
-        AttrIdx idx = attrs.size();
-        attrs[idx] = *attr.get();
-        return idx;
-    }
-
-    std::unique_ptr<Attr> operator[](const AttrIdx idx)
-    {
-        auto stored_value = attrs[idx];
-        Attr* rvalue = new Attr(); // This is not leaked - we hand it to the unique ptr below.
-        memcpy(rvalue, &stored_value, sizeof(Attr));
-        return std::unique_ptr<Attr>(rvalue);
-    }
-
-    size_t size() const
-    {
-        return attrs.size();
-    }
-
-    size_t totalSize() const;
-};
 
 /**
  * Bindings contains all the attributes of an attribute set. It is defined

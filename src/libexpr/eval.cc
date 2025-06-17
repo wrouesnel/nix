@@ -28,6 +28,8 @@
 #include <sys/resource.h>
 #include <nlohmann/json.hpp>
 
+#include "value-table.hh"
+
 #if HAVE_BOEHMGC
 
 #define GC_INCLUDE_NEW
@@ -965,12 +967,6 @@ void EvalState::mkList(Value & v, size_t size)
 
 unsigned long nrThunks = 0;
 
-static inline void mkThunk(Value & v, Env & env, Expr * expr)
-{
-    v.mkThunk(&env, expr);
-    nrThunks++;
-}
-
 
 void EvalState::mkThunk_(Value & v, Expr * expr)
 {
@@ -1071,17 +1067,17 @@ void EvalState::mkSingleDerivedPathString(
    in the given environment.  But if the expression is a variable,
    then look it up right away.  This significantly reduces the number
    of thunks allocated. */
-Value * Expr::maybeThunk(EvalState & state, Env & env)
+ValueIdx Expr::maybeThunk(EvalState & state, Env & env)
 {
-    Value * v = state.allocValue();
-    mkThunk(*v, env, this);
+    auto v = state.values.mkThunk(&env,this);
+    nrThunks++;
     return v;
 }
 
 
-Value * ExprVar::maybeThunk(EvalState & state, Env & env)
+ValueIdx ExprVar::maybeThunk(EvalState & state, Env & env)
 {
-    Value * v = state.lookupVar(&env, *this, true);
+    auto v = state.lookupVar(&env, *this, true);
     /* The value might not be initialised in the environment yet.
        In that case, ignore it. */
     if (v) { state.nrAvoided++; return v; }
@@ -1089,25 +1085,25 @@ Value * ExprVar::maybeThunk(EvalState & state, Env & env)
 }
 
 
-Value * ExprString::maybeThunk(EvalState & state, Env & env)
+ValueIdx ExprString::maybeThunk(EvalState & state, Env & env)
 {
     state.nrAvoided++;
     return &v;
 }
 
-Value * ExprInt::maybeThunk(EvalState & state, Env & env)
+ValueIdx ExprInt::maybeThunk(EvalState & state, Env & env)
 {
     state.nrAvoided++;
     return &v;
 }
 
-Value * ExprFloat::maybeThunk(EvalState & state, Env & env)
+ValueIdx ExprFloat::maybeThunk(EvalState & state, Env & env)
 {
     state.nrAvoided++;
     return &v;
 }
 
-Value * ExprPath::maybeThunk(EvalState & state, Env & env)
+ValueIdx ExprPath::maybeThunk(EvalState & state, Env & env)
 {
     state.nrAvoided++;
     return &v;

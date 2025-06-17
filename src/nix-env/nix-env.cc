@@ -155,8 +155,6 @@ static void getAllExprs(EvalState & state,
     }
 }
 
-
-
 static void loadSourceExpr(EvalState & state, const SourcePath & path, Value & v)
 {
     auto st = path.resolveSymlinks().lstat();

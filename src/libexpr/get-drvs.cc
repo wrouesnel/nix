@@ -217,12 +217,13 @@ bool DrvInfo::checkMeta(Value & v)
 }
 
 
-Value * DrvInfo::queryMeta(const std::string & name)
+std::unique_ptr<Value> DrvInfo::queryMeta(const std::string & name)
 {
     if (!getMeta()) return 0;
     Bindings::iterator a = meta->find(state->symbols.create(name));
-    if (a == meta->end() || !checkMeta(*a->value)) return 0;
-    return a->value;
+    auto value = state->values[a->value];
+    if (a == meta->end() || !checkMeta(*value)) return 0;
+    return value;
 }
 
 

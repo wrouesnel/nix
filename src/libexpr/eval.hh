@@ -185,6 +185,9 @@ class EvalState : public std::enable_shared_from_this<EvalState>
 public:
     SymbolTable symbols;
     PosTable positions;
+    // TODO(wrouesnel): does this need to be a regular object with proper locking?
+    ValueTable values;
+    AttributesTable attrs;
 
     const Symbol sWith, sOutPath, sDrvPath, sType, sMeta, sName, sValue,
         sSystem, sOverrides, sOutputs, sOutputName, sIgnoreNulls,
@@ -646,11 +649,11 @@ public:
     /**
      * Allocation primitives.
      */
-    inline Value * allocValue();
+    inline ValueTable::iterator allocValue();
     inline Env & allocEnv(size_t size);
 
-    Value * allocAttr(Value & vAttrs, Symbol name);
-    Value * allocAttr(Value & vAttrs, std::string_view name);
+    ValueTable::iterator allocAttr(Value & vAttrs, Symbol name);
+    ValueTable::iterator allocAttr(Value & vAttrs, std::string_view name);
 
     Bindings * allocBindings(size_t capacity);
 

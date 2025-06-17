@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <climits>
+#include <stxxl/map>
 
 #include "symbol-table.hh"
 #include "value/context.hh"
@@ -12,6 +13,9 @@
 #include <gc/gc_allocator.h>
 #endif
 #include <nlohmann/json_fwd.hpp>
+#include <stxxl/bits/compat/type_traits.h>
+
+#include "attr-set.hh"
 
 namespace nix {
 
@@ -35,7 +39,7 @@ typedef enum {
     tPrimOp,
     tPrimOpApp,
     tExternal,
-    tFloat
+    tFloat,
 } InternalType;
 
 /**
@@ -130,9 +134,31 @@ class ExternalValueBase
 
 std::ostream & operator << (std::ostream & str, const ExternalValueBase & v);
 
+/**
+ * ValueIdx is the unique identifier for a value in the lookup table. ValueIdx is mapped through the ValueTable
+ * to the current actual value of the Value. This implements a copy on write scheme in the master value cache
+ * which hopefully keeps in-use values local (and allows to update them since we can just extend the buffer).
+ */
+typedef size_t ValueIdx;
+typedef size_t ValueOffset;
 
-struct Value
+#define DATA_NODE_BLOCK_SIZE (4096)
+#define DATA_LEAF_BLOCK_SIZE (4096)
+
+struct ValueIdxCompareLess
 {
+    bool operator () (const ValueIdx & a, const ValueIdx & b) const
+    { return a<b; }
+    static size_t max_value()
+    { return std::numeric_limits<ValueIdx>::max(); }
+};
+
+/**
+ * Value holds the necessary references to work with a value stored in the value table.
+ */
+class Value
+{
+    friend class ValueTable;
 private:
     InternalType internalType;
 
@@ -157,6 +183,49 @@ public:
     inline bool isLambda() const { return internalType == tLambda; };
     inline bool isPrimOp() const { return internalType == tPrimOp; };
     inline bool isPrimOpApp() const { return internalType == tPrimOpApp; };
+
+    /**
+     * Returns the normal type of a Value. This only returns nThunk if
+     * the Value hasn't been forceValue'd
+     *
+     * @param invalidIsThunk Instead of aborting an an invalid (probably
+     * 0, so uninitialized) internal type, return `nThunk`.
+     */
+    inline ValueType type(bool invalidIsThunk = false) const
+    {
+        switch (internalType) {
+        case tInt: return nInt;
+        case tBool: return nBool;
+        case tString: return nString;
+        case tPath: return nPath;
+        case tNull: return nNull;
+        case tAttrs: return nAttrs;
+        case tList1: case tList2: case tListN: return nList;
+        case tLambda: case tPrimOp: case tPrimOpApp: return nFunction;
+        case tExternal: return nExternal;
+        case tFloat: return nFloat;
+        case tThunk: case tApp: case tBlackhole: return nThunk;
+        }
+        if (invalidIsThunk)
+            return nThunk;
+        else
+            abort();
+    }
+
+    bool isList() const;
+    std::unique_ptr<Value> listElems();
+    size_t listSize() const;
+    PosIdx determinePos(const PosIdx pos) const;
+    /**
+     * Check whether forcing this value requires a trivial amount of
+     * computation. In particular, function applications are
+     * non-trivial.
+     */
+    bool isTrivial() const;
+    auto listItems();
+    auto listItems() const;
+    SourcePath path() const;
+    std::string_view str() const;
 
     union
     {
@@ -191,18 +260,23 @@ public:
         } string;
 
         const char * _path;
-        Bindings * attrs;
-        struct {
-            size_t size;
-            Value * * elems;
-        } bigList;
-        Value * smallList[2];
+        struct
+        {
+            AttrIdx start;
+            AttrIdx end;
+        } attrs;
+        struct
+        {
+            ValueIdx start;
+            ValueIdx end;
+        } list;
         struct {
             Env * env;
             Expr * expr;
         } thunk;
         struct {
-            Value * left, * right;
+            ValueIdx left;
+            ValueIdx right;
         } app;
         struct {
             Env * env;
@@ -210,244 +284,73 @@ public:
         } lambda;
         PrimOp * primOp;
         struct {
-            Value * left, * right;
+            ValueIdx left;
+            ValueIdx right;
         } primOpApp;
         ExternalValueBase * external;
         NixFloat fpoint;
     };
-
-    /**
-     * Returns the normal type of a Value. This only returns nThunk if
-     * the Value hasn't been forceValue'd
-     *
-     * @param invalidIsThunk Instead of aborting an an invalid (probably
-     * 0, so uninitialized) internal type, return `nThunk`.
-     */
-    inline ValueType type(bool invalidIsThunk = false) const
-    {
-        switch (internalType) {
-            case tInt: return nInt;
-            case tBool: return nBool;
-            case tString: return nString;
-            case tPath: return nPath;
-            case tNull: return nNull;
-            case tAttrs: return nAttrs;
-            case tList1: case tList2: case tListN: return nList;
-            case tLambda: case tPrimOp: case tPrimOpApp: return nFunction;
-            case tExternal: return nExternal;
-            case tFloat: return nFloat;
-            case tThunk: case tApp: case tBlackhole: return nThunk;
-        }
-        if (invalidIsThunk)
-            return nThunk;
-        else
-            abort();
-    }
-
-    /**
-     * After overwriting an app node, be sure to clear pointers in the
-     * Value to ensure that the target isn't kept alive unnecessarily.
-     */
-    inline void clearValue()
-    {
-        app.left = app.right = 0;
-    }
-
-    inline void mkInt(NixInt n)
-    {
-        clearValue();
-        internalType = tInt;
-        integer = n;
-    }
-
-    inline void mkBool(bool b)
-    {
-        clearValue();
-        internalType = tBool;
-        boolean = b;
-    }
-
-    inline void mkString(const char * s, const char * * context = 0)
-    {
-        internalType = tString;
-        string.s = s;
-        string.context = context;
-    }
-
-    void mkString(std::string_view s);
-
-    void mkString(std::string_view s, const NixStringContext & context);
-
-    void mkStringMove(const char * s, const NixStringContext & context);
-
-    inline void mkString(const Symbol & s)
-    {
-        mkString(((const std::string &) s).c_str());
-    }
-
-    void mkPath(const SourcePath & path);
-
-    inline void mkPath(const char * path)
-    {
-        clearValue();
-        internalType = tPath;
-        _path = path;
-    }
-
-    inline void mkNull()
-    {
-        clearValue();
-        internalType = tNull;
-    }
-
-    inline void mkAttrs(Bindings * a)
-    {
-        clearValue();
-        internalType = tAttrs;
-        attrs = a;
-    }
-
-    Value & mkAttrs(BindingsBuilder & bindings);
-
-    inline void mkList(size_t size)
-    {
-        clearValue();
-        if (size == 1)
-            internalType = tList1;
-        else if (size == 2)
-            internalType = tList2;
-        else {
-            internalType = tListN;
-            bigList.size = size;
-        }
-    }
-
-    inline void mkThunk(Env * e, Expr * ex)
-    {
-        internalType = tThunk;
-        thunk.env = e;
-        thunk.expr = ex;
-    }
-
-    inline void mkApp(Value * l, Value * r)
-    {
-        internalType = tApp;
-        app.left = l;
-        app.right = r;
-    }
-
-    inline void mkLambda(Env * e, ExprLambda * f)
-    {
-        internalType = tLambda;
-        lambda.env = e;
-        lambda.fun = f;
-    }
-
-    inline void mkBlackhole()
-    {
-        internalType = tBlackhole;
-        // Value will be overridden anyways
-    }
-
-    inline void mkPrimOp(PrimOp * p)
-    {
-        clearValue();
-        internalType = tPrimOp;
-        primOp = p;
-    }
-
-
-    inline void mkPrimOpApp(Value * l, Value * r)
-    {
-        internalType = tPrimOpApp;
-        app.left = l;
-        app.right = r;
-    }
-
-    inline void mkExternal(ExternalValueBase * e)
-    {
-        clearValue();
-        internalType = tExternal;
-        external = e;
-    }
-
-    inline void mkFloat(NixFloat n)
-    {
-        clearValue();
-        internalType = tFloat;
-        fpoint = n;
-    }
-
-    bool isList() const
-    {
-        return internalType == tList1 || internalType == tList2 || internalType == tListN;
-    }
-
-    Value * * listElems()
-    {
-        return internalType == tList1 || internalType == tList2 ? smallList : bigList.elems;
-    }
-
-    const Value * const * listElems() const
-    {
-        return internalType == tList1 || internalType == tList2 ? smallList : bigList.elems;
-    }
-
-    size_t listSize() const
-    {
-        return internalType == tList1 ? 1 : internalType == tList2 ? 2 : bigList.size;
-    }
-
-    PosIdx determinePos(const PosIdx pos) const;
-
-    /**
-     * Check whether forcing this value requires a trivial amount of
-     * computation. In particular, function applications are
-     * non-trivial.
-     */
-    bool isTrivial() const;
-
-    auto listItems()
-    {
-        struct ListIterable
-        {
-            typedef Value * const * iterator;
-            iterator _begin, _end;
-            iterator begin() const { return _begin; }
-            iterator end() const { return _end; }
-        };
-        assert(isList());
-        auto begin = listElems();
-        return ListIterable { begin, begin + listSize() };
-    }
-
-    auto listItems() const
-    {
-        struct ConstListIterable
-        {
-            typedef const Value * const * iterator;
-            iterator _begin, _end;
-            iterator begin() const { return _begin; }
-            iterator end() const { return _end; }
-        };
-        assert(isList());
-        auto begin = listElems();
-        return ConstListIterable { begin, begin + listSize() };
-    }
-
-    SourcePath path() const
-    {
-        assert(internalType == tPath);
-        return SourcePath{CanonPath(_path)};
-    }
-
-    std::string_view str() const
-    {
-        assert(internalType == tString);
-        return std::string_view(string.s);
-    }
 };
 
+/**
+ * ValueTable centralizes the management of values, so they can be created and pageD out to disk backed
+ * cache by STXXL. EvalState carries a ValueTable, which in turn keeps our memory usage under control by
+ * allowing things to be paged to disk.
+ */
+class ValueTable
+{
+private:
+    stxxl::map<ValueIdx,ValueOffset,ValueIdxCompareLess,DATA_NODE_BLOCK_SIZE,DATA_LEAF_BLOCK_SIZE> valuesMap;
+    stxxl::vector<Value> values;
+
+    ValueIdx nrValues;
+
+    // Write a new value to the map
+    ValueIdx writeValue(Value value);
+
+    // Get the next value index (for future thread safing)
+    ValueIdx getNextIndex();
+
+public:
+    ValueTable();
+    ~ValueTable();
+
+    ValueIdx mkInt(NixInt n);
+    ValueIdx mkBool(bool b);
+
+    ValueIdx mkString(const char * s, const char ** context = 0);
+    ValueIdx mkString(std::string_view s);
+    ValueIdx mkString(std::string_view s, const NixStringContext & context);
+    ValueIdx mkString(const Symbol & s);
+
+    ValueIdx mkPath(const SourcePath & path);
+
+    ValueIdx mkNull();
+
+    ValueIdx mkAttrs(Bindings * a);
+    // ValueIdx mkAttrs(BindingsBuilder & bindings);
+
+    ValueIdx mkList(size_t size);
+
+    ValueIdx mkThunk(Env * e, Expr * ex);
+    ValueIdx mkApp(ValueIdx l, ValueIdx r);
+    ValueIdx mkLambda(Env * e, ExprLambda * f);
+    ValueIdx mkBlackhole();
+    ValueIdx mkPrimOp(PrimOp * p);
+    ValueIdx mkPrimOpApp(ValueIdx l, ValueIdx r);
+    ValueIdx mkExternal(ExternalValueBase * e);
+    ValueIdx mkFloat(NixFloat n);
+
+    // Technically not needed because we no longer use GC.
+    ValueIdx ValueTable::clearValue(ValueIdx idx);
+
+    size_t size() const
+    {
+        return values.size();
+    }
+
+    size_t totalSize() const;
+};
 
 #if HAVE_BOEHMGC
 typedef std::vector<Value *, traceable_allocator<Value *>> ValueVector;

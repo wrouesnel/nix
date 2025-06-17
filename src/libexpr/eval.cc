@@ -917,12 +917,6 @@ DebugTraceStacker::DebugTraceStacker(EvalState & evalState, DebugTrace t)
         evalState.runDebugRepl(nullptr, trace.env, trace.expr);
 }
 
-void Value::mkString(std::string_view s)
-{
-    mkString(makeImmutableString(s));
-}
-
-
 static void copyContextToValue(Value & v, const NixStringContext & context)
 {
     if (!context.empty()) {
@@ -934,25 +928,6 @@ static void copyContextToValue(Value & v, const NixStringContext & context)
         v.string.context[n] = 0;
     }
 }
-
-void Value::mkString(std::string_view s, const NixStringContext & context)
-{
-    mkString(s);
-    copyContextToValue(*this, context);
-}
-
-void Value::mkStringMove(const char * s, const NixStringContext & context)
-{
-    mkString(s);
-    copyContextToValue(*this, context);
-}
-
-
-void Value::mkPath(const SourcePath & path)
-{
-    mkPath(makeImmutableString(path.path.abs()));
-}
-
 
 inline Value * EvalState::lookupVar(Env * env, const ExprVar & var, bool noEval)
 {

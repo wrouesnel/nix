@@ -24,8 +24,8 @@ struct Attr
        way we keep Attr size at two words with no wasted space. */
     Symbol name;
     PosIdx pos;
-    Value * value;
-    Attr(Symbol name, Value * value, PosIdx pos = noPos)
+    ValueIdx value;
+    Attr(Symbol name, ValueIdx value, PosIdx pos = noPos)
         : name(name), pos(pos), value(value) { };
     Attr() { };
     bool operator < (const Attr & a) const
@@ -38,6 +38,51 @@ static_assert(sizeof(Attr) == 2 * sizeof(uint32_t) + sizeof(Value *),
     "performance of the evaluator is highly sensitive to the size of Attr. "
     "avoid introducing any padding into Attr if at all possible, and do not "
     "introduce new fields that need not be present for almost every instance.");
+
+typedef size_t AttrIdx;
+
+/**
+ * AttributesTable provides a master lookup table for attributes. This notably just means
+ * storing them all in a big index vector on disk, so bindings can store vector ranges.
+ * rather then lists of attributes.
+ */
+class AttributesTable
+{
+private:
+    typedef stxxl::vector<Attr> AttributeCache;
+    AttributeCache attrs;
+public:
+    AttributesTable()
+    {
+        attrs.allocate_page_cache();
+    }
+    ~AttributesTable()
+    {
+        attrs.deallocate_page_cache();
+    }
+
+    ValueIdx create(std::unique_ptr<Attr> attr)
+    {
+        AttrIdx idx = attrs.size();
+        attrs[idx] = *attr.get();
+        return idx;
+    }
+
+    std::unique_ptr<Attr> operator[](const AttrIdx idx)
+    {
+        auto stored_value = attrs[idx];
+        Attr* rvalue = new Attr(); // This is not leaked - we hand it to the unique ptr below.
+        memcpy(rvalue, &stored_value, sizeof(Attr));
+        return std::unique_ptr<Attr>(rvalue);
+    }
+
+    size_t size() const
+    {
+        return attrs.size();
+    }
+
+    size_t totalSize() const;
+};
 
 /**
  * Bindings contains all the attributes of an attribute set. It is defined
@@ -52,7 +97,9 @@ public:
     PosIdx pos;
 
 private:
-    size_t size_, capacity_;
+    size_t start_;
+    size_t end_;
+
     Attr attrs[0];
 
     Bindings(size_t capacity) : size_(0), capacity_(capacity) { }
@@ -116,6 +163,7 @@ public:
     }
 
     friend class EvalState;
+    friend class ValueTable;
 };
 
 /**
@@ -137,7 +185,7 @@ public:
         : bindings(bindings), state(state)
     { }
 
-    void insert(Symbol name, Value * value, PosIdx pos = noPos)
+    void insert(Symbol name, ValueIdx value, PosIdx pos = noPos)
     {
         insert(Attr(name, value, pos));
     }

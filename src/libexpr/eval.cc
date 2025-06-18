@@ -107,10 +107,9 @@ RootValue allocRootValue(Value * v)
 {
 #if HAVE_BOEHMGC
     return std::allocate_shared<Value *>(traceable_allocator<Value *>(), v);
-// #elif HAVE_METALL
-//     return std::allocate_shared<Value *>(manager.get_allocator<Value*>(), v);
+#elif HAVE_METALL
+    return std::allocate_shared<Value *>(manager->get_allocator<Value*>(), v);
 #else
-    // no HAVE_METALL needed currently
     return std::make_shared<Value *>(v);
 #endif
 }

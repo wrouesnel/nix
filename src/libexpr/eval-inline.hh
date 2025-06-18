@@ -20,6 +20,7 @@ inline void * allocBytes(size_t n)
     p = GC_MALLOC(n);
 #elif HAVE_METALL
     p = manager->allocate(n);
+    memset(p,0,n); // IMPORTANT: memory is expected to be zeroed!
 #else
     p = calloc(n, 1);
 #endif

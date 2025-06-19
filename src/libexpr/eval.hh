@@ -16,15 +16,7 @@
 #include <unordered_map>
 #include <mutex>
 
-#if HAVE_METALL
-#include <metall/metall.hpp>
-#endif
-
 namespace nix {
-
-#if HAVE_METALL
-extern metall::manager* manager;
-#endif
 
 class Store;
 class EvalState;

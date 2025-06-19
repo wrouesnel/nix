@@ -137,6 +137,10 @@ std::ostream & operator << (std::ostream & os, const ValueType t);
  */
 void initGC();
 
+/**
+ * Shutdown the custom allocator, if applicable.
+ */
+void shutdownGC();
 
 struct RegexCache;
 

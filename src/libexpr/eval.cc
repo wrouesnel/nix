@@ -381,6 +381,10 @@ public:
 
 static bool gcInitialised = false;
 
+#if HAVE_METALL
+static boost::filesystem::path diskCache;
+#endif
+
 void initGC()
 {
     if (gcInitialised) return;
@@ -434,12 +438,25 @@ void initGC()
         GC_expand_hp(size);
     }
 #elif HAVE_METALL
-    auto base_path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
-    boost::filesystem::create_directories(base_path);
-    manager = new metall::manager(metall::create_only, base_path.c_str());
+    diskCache = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
+    boost::filesystem::create_directories(diskCache);
+    manager = new metall::manager(metall::create_only, diskCache.c_str());
 #endif
 
     gcInitialised = true;
+}
+
+void shutdownGC()
+{
+#if HAVE_METALL
+    /**
+     * Clean up the disk cache when exiting
+     */
+    if (!diskCache.empty())
+    {
+        boost::filesystem::remove_all(diskCache);
+    }
+#endif
 }
 
 

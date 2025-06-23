@@ -9,8 +9,8 @@ while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symli
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 
-export METALL_CFLAGS="-I $SCRIPT_DIR/../../LLNL/metall"
+export METALL_CFLAGS="-I $SCRIPT_DIR/../../LLNL/metall/include"
 export METALL_LIBS=" "
 
-CFLAGS="-DBOOST_USE_SEGMENTED_STACKS -DDEBUG -ggdb -O0" CXXFLAGS="-DDEBUG -ggdb -O0" \
-  ./configure $configureFlags --prefix=$(pwd) --disable-gc --enable-metall --disable-shared "$@"
+CFLAGS="-DBOOST_USE_SEGMENTED_STACKS -DDEBUG -ggdb -O0" CXXFLAGS="-DBOOST_USE_SEGMENTED_STACKS -DDEBUG -ggdb -O0" \
+  ./configure $configureFlags --prefix=$(pwd) --disable-gc --enable-metall --disable-shared --disable-doc-gen "$@"

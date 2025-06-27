@@ -88,40 +88,68 @@ public:
     };
 
 private:
-    std::vector<Origin> origins;
-    ChunkedVector<Offset, 8192> offsets;
+#if HAVE_METALL
+    typedef std::vector<Origin, metall::manager::allocator_type<Origin>> Origins;
+#else
+    typedef std::vector<Origin> Origins;
+#endif
+    typedef LargeChunkedVector<Offset, 8192> Offsets;
+
+    Origins* origins;
+    Offsets* offsets;
 
 public:
-    PosTable(): offsets(1024)
+#if HAVE_METALL
+    PosTable()
     {
-        origins.reserve(1024);
+#if HAVE_METALL
+        origins = new Origins(manager->get_allocator<>());
+        offsets = new Offsets(1024);
+#else
+        origins = new Origins;
+        offsets = new Offsets(1024);
+#endif
     }
+
+//     ~PosTable()
+//     {
+// #if HAVE_METALL
+//         manager->deallocate(origins);
+//         manager->deallocate(offsets);
+// #else
+//         delete origins;
+//         delete offsets;
+// #endif
+//         origins = nullptr;
+//         offsets = nullptr;
+//     }
 
     PosIdx add(const Origin & origin, uint32_t line, uint32_t column)
     {
-        const auto idx = offsets.add({line, column}).second;
-        if (origins.empty() || origins.back().idx != origin.idx) {
+        const auto idx = offsets->add({line, column}).second;
+        if (origins->empty() || origins->back().idx != origin.idx) {
             origin.idx = idx;
-            origins.push_back(origin);
+            origins->push_back(origin);
         }
         return PosIdx(idx + 1);
     }
 
     Pos operator[](PosIdx p) const
     {
-        if (p.id == 0 || p.id > offsets.size())
+        if (p.id == 0 || p.id > offsets->size())
             return {};
         const auto idx = p.id - 1;
         /* we want the last key <= idx, so we'll take prev(first key > idx).
            this is guaranteed to never rewind origin.begin because the first
            key is always 0. */
         const auto pastOrigin = std::upper_bound(
-            origins.begin(), origins.end(), Origin(idx),
+            origins->begin(), origins->end(), Origin(idx),
             [] (const auto & a, const auto & b) { return a.idx < b.idx; });
         const auto origin = *std::prev(pastOrigin);
-        const auto offset = offsets[idx];
+        const auto offset = (*offsets)[idx];
         return {offset.line, offset.column, origin.origin};
     }
+#endif
 };
 
 inline PosIdx noPos = {};

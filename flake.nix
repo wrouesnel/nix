@@ -1,12 +1,15 @@
 {
   description = "The purely functional package manager";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05-small";
+  # nixos-23.11-small is the oldest channel that carries boost183, which the
+  # Metall allocator needs (it requires Boost >= 1.80).
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.11-small";
   inputs.nixpkgs-regression.url = "github:NixOS/nixpkgs/215d4d0fd80ca5163643b03a33fde804a29cc1e2";
   inputs.lowdown-src = { url = "github:kristapsdz/lowdown"; flake = false; };
   inputs.flake-compat = { url = "github:edolstra/flake-compat"; flake = false; };
+  inputs.metall-src = { url = "github:LLNL/metall/v0.35"; flake = false; };
 
-  outputs = { self, nixpkgs, nixpkgs-regression, lowdown-src, flake-compat }:
+  outputs = { self, nixpkgs, nixpkgs-regression, lowdown-src, flake-compat, metall-src }:
 
     let
       inherit (nixpkgs) lib;
@@ -104,6 +107,10 @@
         , isStatic ? pkgs.stdenv.hostPlatform.isStatic
         }:
         with pkgs; rec {
+        # Metall requires Boost >= 1.80, but nixpkgs' default `boost` is still
+        # 1.81. Pin 1.83 so the evaluator and Metall agree on one Boost.
+        boost = pkgs.boost183;
+
         # Use "busybox-sandbox-shell" if present,
         # if not (legacy) fallback and hope it's sufficient.
         sh = pkgs.busybox-sandbox-shell or (busybox.override {
@@ -131,9 +138,16 @@
         });
 
         configureFlags =
-          lib.optionals stdenv.isLinux [
+          # AX_BOOST_FILESYSTEM probes $BOOST_LDFLAGS for a libboost_filesystem
+          # to guess the library name from, and that is empty here because Boost
+          # is found via NIX_CFLAGS/NIX_LDFLAGS rather than a prefix. Name the
+          # library outright so the probe is skipped.
+          [ "--with-boost-filesystem=boost_filesystem" ]
+          ++ lib.optionals stdenv.isLinux [
             "--with-boost=${boost}/lib"
             "--with-sandbox-shell=${sh}/bin/busybox"
+            "--enable-metall"
+            "--disable-gc"
           ]
           ++ lib.optionals (stdenv.isLinux && !(isStatic && stdenv.system == "aarch64-linux")) [
             "LDFLAGS=-fuse-ld=gold"
@@ -174,6 +188,7 @@
             lowdown-nix
           ]
           ++ lib.optionals stdenv.isDarwin [darwin.apple_sdk.libs.sandbox]
+          ++ lib.optionals stdenv.isLinux [metall]
           ++ lib.optionals stdenv.isLinux [(libseccomp.overrideAttrs (_: rec {
             version = "2.5.5";
             src = fetchurl {
@@ -285,7 +300,7 @@
           installerClosureInfo = buildPackages.closureInfo { rootPaths = [ nix cacert ]; };
         in
 
-        buildPackages.runCommand "nix-binary-tarball-${version}"
+        buildPackages.runCommand "nix-metall-binary-tarball-${version}"
           { #nativeBuildInputs = lib.optional (system != "aarch64-linux") shellcheck;
             meta.description = "Distribution-independent Nix bootstrap binaries for ${pkgs.system}";
           }
@@ -369,7 +384,7 @@
           let
             canRunInstalled = currentStdenv.buildPlatform.canExecute currentStdenv.hostPlatform;
           in currentStdenv.mkDerivation (finalAttrs: {
-            name = "nix-${version}";
+            name = "nix-${version}-metall";
             inherit version;
 
             src = nixSrc;
@@ -392,11 +407,15 @@
                 # Copy libboost_context so we don't get all of Boost in our closure.
                 # https://github.com/NixOS/nixpkgs/issues/45462
                 mkdir -p $out/lib
-                cp -pd ${boost}/lib/{libboost_context*,libboost_thread*,libboost_system*} $out/lib
+                cp -pd ${boost}/lib/{libboost_context*,libboost_thread*,libboost_system*,libboost_filesystem*,libboost_atomic*} $out/lib
                 rm -f $out/lib/*.a
                 ${lib.optionalString currentStdenv.hostPlatform.isLinux ''
                   chmod u+w $out/lib/*.so.*
-                  patchelf --set-rpath $out/lib:${currentStdenv.cc.cc.lib}/lib $out/lib/libboost_thread.so.*
+                  # libboost_filesystem is linked against libboost_atomic, and
+                  # libboost_thread against libboost_system, so point them at the
+                  # copies rather than back into Boost's store path.
+                  patchelf --set-rpath $out/lib:${currentStdenv.cc.cc.lib}/lib \
+                    $out/lib/libboost_thread.so.* $out/lib/libboost_filesystem.so.*
                 ''}
                 ${lib.optionalString currentStdenv.hostPlatform.isDarwin ''
                   for LIB in $out/lib/*.dylib; do
@@ -465,7 +484,8 @@
                   bzip2
                   xz
                   pkgs.perl
-                  boost
+                  # Not `boost`: the inner `with final` shadows commonDeps.
+                  boost183
                 ]
                 ++ lib.optional (currentStdenv.isLinux || currentStdenv.isDarwin) libsodium
                 ++ lib.optional currentStdenv.isDarwin darwin.apple_sdk.frameworks.Security
@@ -482,6 +502,44 @@
             });
 
             meta.platforms = lib.platforms.unix;
+          });
+
+          # The LLNL Metall allocator is a header-only library. 
+          # Drop the headers in place and write the pkg-config file
+          # The Boost headers Metall needs come from the `boost` build input.
+          metall = with final; stdenvNoCC.mkDerivation (finalAttrs: {
+            pname = "metall";
+            version = "0.35";
+
+            src = metall-src;
+
+            dontBuild = true;
+
+            installPhase = ''
+              runHook preInstall
+
+              mkdir -p $out/include $out/lib/pkgconfig
+              cp -r include/metall $out/include/
+
+              cat > $out/lib/pkgconfig/metall.pc <<EOF
+              prefix=$out
+              includedir=\''${prefix}/include
+
+              Name: metall
+              Description: LLNL Metall persistent memory allocator
+              Version: ${finalAttrs.version}
+              Cflags: -I\''${includedir}
+              EOF
+
+              runHook postInstall
+            '';
+
+            meta = {
+              description = "Persistent memory allocator for data-centric analytics";
+              homepage = "https://github.com/LLNL/metall";
+              license = with lib.licenses; [ mit asl20 ];
+              platforms = lib.platforms.unix;
+            };
           });
 
           lowdown-nix = with final; currentStdenv.mkDerivation rec {
@@ -546,6 +604,9 @@
         # with the closure of 'nix' package, and the second half of
         # the installation script.
         binaryTarball = forAllSystems (system: binaryTarball nixpkgsFor.${system}.native.nix nixpkgsFor.${system}.native);
+
+        # The same tarball, but from a build that skipped the test suite.
+        binaryTarballNoTests = forAllSystems (system: binaryTarball self.hydraJobs.buildNoTests.${system} nixpkgsFor.${system}.native);
 
         binaryTarballCross = lib.genAttrs ["x86_64-linux"] (system:
           forAllCrossSystems (crossSystem:

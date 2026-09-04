@@ -32,18 +32,35 @@
         "type": "github"
       }
     },
+    "metall-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787637087,
+        "narHash": "sha256-pFRTHlZ231fe+xqSsHuWNSho8xdd9A7dTAUT/GdrpNk=",
+        "owner": "LLNL",
+        "repo": "metall",
+        "rev": "84a80b8dded23c2d251091a9ddd103fde4e8caad",
+        "type": "github"
+      },
+      "original": {
+        "owner": "LLNL",
+        "ref": "v0.35",
+        "repo": "metall",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1700748986,
-        "narHash": "sha256-/nqLrNU297h3PCw4QyDpZKZEUHmialJdZW2ceYFobds=",
+        "lastModified": 1720535198,
+        "narHash": "sha256-zwVvxrdIzralnSbcpghA92tWu2DV2lwv89xZc8MTrbg=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "9ba29e2346bc542e9909d1021e8fd7d4b3f64db0",
+        "rev": "205fd4226592cc83fd4c0885a3e4c9c400efabb5",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-23.05-small",
+        "ref": "nixos-23.11-small",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -68,6 +85,7 @@
       "inputs": {
         "flake-compat": "flake-compat",
         "lowdown-src": "lowdown-src",
+        "metall-src": "metall-src",
         "nixpkgs": "nixpkgs",
         "nixpkgs-regression": "nixpkgs-regression"
       }

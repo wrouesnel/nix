@@ -40,8 +40,16 @@
 #include <boost/coroutine2/protected_fixedsize_stack.hpp>
 #include <boost/context/stack_context.hpp>
 
-#elif HAVE_METALL
+#else
+
+#include <boost/coroutine2/coroutine.hpp>
+#include <boost/coroutine2/protected_fixedsize_stack.hpp>
+#include <boost/context/stack_context.hpp>
+
+#if HAVE_METALL
 #include <metall/metall.hpp>
+#endif
+
 #endif
 
 using json = nlohmann::json;
@@ -346,8 +354,32 @@ class BoehmGCStackAllocator : public StackAllocator {
 
 static BoehmGCStackAllocator boehmGCStackAllocator;
 
+#else
+
+/* Boost's default coroutine stack is a 128 KiB malloc()ed block with
+   no guard page, so deep recursion inside a coroutine (e.g. dumpPath()
+   on a deeply nested directory being added to the store) silently
+   overwrites whatever memory lies below it. Use the same stack size as
+   the Boehm build, with a guard page so that an overflow is caught by
+   the stack overflow handler instead. */
+class ProtectedStackAllocator : public StackAllocator {
+    boost::coroutines2::protected_fixedsize_stack stack {
+        std::max(boost::context::stack_traits::default_size(), static_cast<std::size_t>(8 * 1024 * 1024))
+    };
+
+  public:
+    boost::context::stack_context allocate() override {
+        return stack.allocate();
+    }
+
+    void deallocate(boost::context::stack_context sctx) override {
+        stack.deallocate(sctx);
+    }
+};
+
+static ProtectedStackAllocator protectedStackAllocator;
+
 #endif
-// No METALL implementation needed right now
 
 static Symbol getName(const AttrName & name, EvalState & state, Env & env)
 {
@@ -437,7 +469,11 @@ void initGC()
         debug("setting initial heap size to %1% bytes", size);
         GC_expand_hp(size);
     }
-#elif HAVE_METALL
+#else
+    StackAllocator::defaultAllocator = &protectedStackAllocator;
+#endif
+
+#if HAVE_METALL
     diskCache = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
     boost::filesystem::create_directories(diskCache);
     manager = new metall::manager(metall::create_only, diskCache.c_str());

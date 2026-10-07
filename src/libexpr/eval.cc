@@ -48,6 +48,10 @@
 
 #if HAVE_METALL
 #include <metall/metall.hpp>
+#if __linux__
+#include <sys/vfs.h>
+#include <linux/magic.h>
+#endif
 #endif
 
 #endif
@@ -474,8 +478,18 @@ void initGC()
 #endif
 
 #if HAVE_METALL
-    diskCache = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
+    /* The datastore backs the whole evaluator heap, so it needs to be on
+       a disk-backed filesystem for memory to be paged out to it. */
+    auto metallDir = getEnv("NIX_METALL_DIR");
+    auto metallBase = metallDir ? boost::filesystem::path(*metallDir) : boost::filesystem::temp_directory_path();
+    diskCache = metallBase / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
     boost::filesystem::create_directories(diskCache);
+#if __linux__
+    struct statfs fs;
+    if (statfs(diskCache.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC))
+        warn("the Metall datastore '%s' is on a memory-backed filesystem, so evaluation memory cannot be paged out to disk; set NIX_METALL_DIR to a directory on disk",
+            diskCache.string());
+#endif
     manager = new metall::manager(metall::create_only, diskCache.c_str());
 #endif
 

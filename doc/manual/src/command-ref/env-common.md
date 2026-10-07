@@ -106,6 +106,14 @@ Most Nix commands interpret the following environment variables:
     384 MiB. Setting it to a low value reduces memory consumption, but
     will increase runtime due to the overhead of garbage collection.
 
+  - <span id="env-NIX_METALL_DIR">[`NIX_METALL_DIR`](#env-NIX_METALL_DIR)</span>\
+    If Nix has been configured to use the Metall allocator, the
+    evaluator heap is kept in a datastore created in a new
+    `nix-eval-*` subdirectory of this directory, and removed when Nix
+    exits. It defaults to [`TMPDIR`](#env-TMPDIR), or `/tmp` if that is
+    unset. It should be on a disk-backed filesystem: if it is on
+    `tmpfs`, the heap cannot be paged out and Nix prints a warning.
+
 ## XDG Base Directories
 
 Nix follows the [XDG Base Directory Specification].

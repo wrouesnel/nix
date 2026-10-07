@@ -282,7 +282,13 @@ void parseCmdLine(const std::string & programName, const Strings & args,
 
 void printVersion(const std::string & programName)
 {
+    /* No space before the tag, so the version stays the third
+       space-separated field for scripts that `cut` it out. */
+#if HAVE_METALL
+    std::cout << fmt("%1% (Nix[METALL]) %2%", programName, nixVersion) << std::endl;
+#else
     std::cout << fmt("%1% (Nix) %2%", programName, nixVersion) << std::endl;
+#endif
     if (verbosity > lvlInfo) {
         Strings cfg;
 #if HAVE_BOEHMGC

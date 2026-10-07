@@ -29,20 +29,21 @@ namespace nix {
 extern metall::manager* manager;
 
 /**
- * Set in a fork()ed child, whose heap is a copy-on-write view of its
- * parent's. The child gets a datastore of its own on its first
- * allocation.
+ * Set while this process has no datastore of its own: after initGC(),
+ * and in a fork()ed child, whose heap is a copy-on-write view of its
+ * parent's. The datastore is created on the first allocation, so
+ * processes that never evaluate anything don't create one.
  */
-extern bool metallHeapInherited;
-void metallCreateChildHeap();
+extern bool metallHeapPending;
+void metallCreateHeap();
 
 /**
  * The Metall manager this process should allocate from.
  */
 inline metall::manager * metallManager()
 {
-    if (__builtin_expect(metallHeapInherited, false))
-        metallCreateChildHeap();
+    if (__builtin_expect(metallHeapPending, false))
+        metallCreateHeap();
     return manager;
 }
 #endif

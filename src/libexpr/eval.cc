@@ -73,7 +73,7 @@ namespace nix {
  * Global manageer for the metall allocator is defined here
  */
 metall::manager *manager;
-bool metallHeapInherited = false;
+bool metallHeapPending = false;
 #endif
 
 static char * allocString(size_t size)
@@ -427,15 +427,17 @@ public:
 static bool gcInitialised = false;
 
 #if HAVE_METALL
-/* The nix-eval-* directory created by initGC(). Each process that
-   allocates gets its own datastore in a subdirectory named after its
-   pid: the initGC() caller, and any fork()ed child (see
-   metallAtForkChild()). */
+/* The nix-eval-* directory for the initGC() caller (diskRootOwner) and
+   its fork()ed children. Its name is chosen by initGC(), but it is only
+   created when one of these processes first allocates. Each process that
+   allocates gets its own datastore in a subdirectory named after its pid
+   (see metallCreateHeap() and metallAtForkChild()). */
 static boost::filesystem::path diskRoot;
+static pid_t diskRootOwner = -1;
 static boost::filesystem::path diskCache;
 
-/* What shutdownGC() removes in this process: all of diskRoot in the
-   initGC() caller, only its own datastore in a child. Also kept as a C
+/* What shutdownGC() removes in this process: all of diskRoot in its
+   owner, only its own datastore in a child. Also kept as a C
    string for shutdownGCFromSignalHandler(), which can't touch the heap,
    with the pid it belongs to: a forked child inherits these but must not
    delete its parent's datastore. */
@@ -465,7 +467,7 @@ static void setDiskCleanup(const boost::filesystem::path & path)
    share the parent's memory, so they must not (and don't) get here. */
 static void metallAtForkChild()
 {
-    if (diskRoot.empty()) return;
+    metallHeapPending = true;
 
     struct Mapping {
         uintptr_t start, end;
@@ -512,14 +514,30 @@ static void metallAtForkChild()
         }
         close(fd);
     }
-
-    metallHeapInherited = true;
 }
 
-void metallCreateChildHeap()
+void metallCreateHeap()
 {
-    metallHeapInherited = false;
+    metallHeapPending = false;
     auto pid = getpid();
+
+    bool firstHeap = !boost::filesystem::exists(diskRoot);
+    diskCache = diskRoot / std::to_string(pid);
+    boost::filesystem::create_directories(diskCache);
+#if __linux__
+    /* The datastore backs the whole evaluator heap, so it needs to be on a
+       disk-backed filesystem for memory to be paged out to it. */
+    struct statfs fs;
+    if (firstHeap && statfs(diskRoot.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC))
+        warn("the Metall datastore '%s' is on a memory-backed filesystem, so evaluation memory cannot be paged out to disk; set NIX_METALL_DIR to a directory on disk",
+            diskRoot.string());
+#endif
+
+    if (pid == diskRootOwner) {
+        /* shutdownGC() already removes all of diskRoot here. */
+        manager = new metall::manager(metall::create_only, diskCache.c_str());
+        return;
+    }
 
     /* Remove the datastores of earlier children that have exited without
        cleaning up, e.g. nix-eval-jobs workers, which leave with _exit(). */
@@ -528,14 +546,12 @@ void metallCreateChildHeap()
         auto name = i->path().filename().string();
         if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit)) continue;
         auto other = (pid_t) strtol(name.c_str(), nullptr, 10);
-        if (other != pid && kill(other, 0) == -1 && errno == ESRCH) {
+        if (other != pid && other != diskRootOwner && kill(other, 0) == -1 && errno == ESRCH) {
             boost::system::error_code ec2;
             boost::filesystem::remove_all(i->path(), ec2);
         }
     }
 
-    diskCache = diskRoot / std::to_string(pid);
-    boost::filesystem::create_directories(diskCache);
     setDiskCleanup(diskCache);
     /* The inherited manager is leaked on purpose: destroying it would
        write its state back into the parent's datastore. */
@@ -600,21 +616,17 @@ void initGC()
 #endif
 
 #if HAVE_METALL
-    /* The datastore backs the whole evaluator heap, so it needs to be on
-       a disk-backed filesystem for memory to be paged out to it. */
+    /* The datastore itself is created on the first allocation (see
+       metallCreateHeap()), so processes that never evaluate anything,
+       such as the build hook, which is killed with SIGKILL, don't leave
+       one behind. */
     auto metallDir = getEnv("NIX_METALL_DIR");
     auto metallBase = metallDir ? boost::filesystem::path(*metallDir) : boost::filesystem::temp_directory_path();
     diskRoot = metallBase / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
-    diskCache = diskRoot / std::to_string(getpid());
-    boost::filesystem::create_directories(diskCache);
-#if __linux__
-    struct statfs fs;
-    if (statfs(diskRoot.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC))
-        warn("the Metall datastore '%s' is on a memory-backed filesystem, so evaluation memory cannot be paged out to disk; set NIX_METALL_DIR to a directory on disk",
-            diskRoot.string());
-#endif
+    diskRootOwner = getpid();
+    /* Removed on exit even if only a child created it. */
     setDiskCleanup(diskRoot);
-    manager = new metall::manager(metall::create_only, diskCache.c_str());
+    metallHeapPending = true;
 
     /* Registered here rather than by each program, so that programs
        linking libnixexpr (e.g. nix-eval-jobs) clean up too. */

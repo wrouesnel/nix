@@ -588,6 +588,8 @@ static void main_nix_build(int argc, char * * argv)
 
         logger->stop();
 
+        shutdownGC();
+
         execvp(shell->c_str(), argPtrs.data());
 
         throw SysError("executing shell '%s'", *shell);

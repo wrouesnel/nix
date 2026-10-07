@@ -48,9 +48,13 @@
 
 #if HAVE_METALL
 #include <metall/metall.hpp>
+#include <climits>
 #if __linux__
 #include <sys/vfs.h>
+#include <sys/syscall.h>
 #include <linux/magic.h>
+#include <dirent.h>
+#include <fcntl.h>
 #endif
 #endif
 
@@ -419,6 +423,12 @@ static bool gcInitialised = false;
 
 #if HAVE_METALL
 static boost::filesystem::path diskCache;
+
+/* Copy of diskCache for shutdownGCFromSignalHandler(), which can't
+   touch the heap, and the process that created it. Forked children
+   inherit diskCache but must not delete it. */
+static char diskCachePath[PATH_MAX];
+static pid_t diskCacheOwner = -1;
 #endif
 
 void initGC()
@@ -490,11 +500,61 @@ void initGC()
         warn("the Metall datastore '%s' is on a memory-backed filesystem, so evaluation memory cannot be paged out to disk; set NIX_METALL_DIR to a directory on disk",
             diskCache.string());
 #endif
+    if (diskCache.string().size() < sizeof(diskCachePath))
+        strcpy(diskCachePath, diskCache.c_str());
+    diskCacheOwner = getpid();
     manager = new metall::manager(metall::create_only, diskCache.c_str());
 #endif
 
     gcInitialised = true;
 }
+
+#if HAVE_METALL && __linux__
+/* Recursively delete `name` (relative to `parentFd`) using only
+   async-signal-safe system calls, so no heap allocation. Returns
+   whether `name` was removed. */
+static bool removeTreeAsyncSignalSafe(int parentFd, const char * name, int depth)
+{
+    if (depth > 8) return false;
+
+    int fd = openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1)
+        return unlinkat(parentFd, name, 0) == 0;
+
+    struct linux_dirent64 {
+        uint64_t d_ino;
+        int64_t d_off;
+        unsigned short d_reclen;
+        unsigned char d_type;
+        char d_name[];
+    };
+
+    /* Entries are removed while reading, so rescan until a pass
+       removes nothing. */
+    bool removed;
+    do {
+        removed = false;
+        lseek(fd, 0, SEEK_SET);
+        alignas(linux_dirent64) char buf[512];
+        long n;
+        while ((n = syscall(SYS_getdents64, fd, buf, sizeof(buf))) > 0) {
+            for (long pos = 0; pos < n; ) {
+                auto * d = (linux_dirent64 *) (buf + pos);
+                pos += d->d_reclen;
+                if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0) continue;
+                if (d->d_type != DT_DIR) {
+                    if (unlinkat(fd, d->d_name, 0) == 0) { removed = true; continue; }
+                    if (errno != EISDIR) continue;
+                }
+                if (removeTreeAsyncSignalSafe(fd, d->d_name, depth + 1)) removed = true;
+            }
+        }
+    } while (removed);
+
+    close(fd);
+    return unlinkat(parentFd, name, AT_REMOVEDIR) == 0;
+}
+#endif
 
 void shutdownGC()
 {
@@ -502,10 +562,19 @@ void shutdownGC()
     /**
      * Clean up the disk cache when exiting
      */
-    if (!diskCache.empty())
-    {
-        boost::filesystem::remove_all(diskCache);
-    }
+    if (diskCache.empty() || getpid() != diskCacheOwner) return;
+    boost::system::error_code ec;
+    boost::filesystem::remove_all(diskCache, ec);
+    diskCache.clear();
+    diskCachePath[0] = 0;
+#endif
+}
+
+void shutdownGCFromSignalHandler()
+{
+#if HAVE_METALL && __linux__
+    if (diskCachePath[0] && getpid() == diskCacheOwner)
+        removeTreeAsyncSignalSafe(AT_FDCWD, diskCachePath, 0);
 #endif
 }
 

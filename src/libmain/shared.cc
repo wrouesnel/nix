@@ -306,10 +306,13 @@ void printVersion(const std::string & programName)
 }
 
 
+std::function<void()> beforeShowManPage;
+
 void showManPage(const std::string & name)
 {
     restoreProcessContext();
     setenv("MANPATH", settings.nixManDir.c_str(), 1);
+    if (beforeShowManPage) beforeShowManPage();
     execlp("man", "man", name.c_str(), nullptr);
     throw SysError("command 'man %1%' failed", name.c_str());
 }

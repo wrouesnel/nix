@@ -85,6 +85,12 @@ struct LegacyArgs : public MixCommonArgs
 void showManPage(const std::string & name);
 
 /**
+ * Called by showManPage() just before it exec()s man(1), to clean up
+ * anything that atexit() handlers would otherwise have handled.
+ */
+extern std::function<void()> beforeShowManPage;
+
+/**
  * The constructor of this class starts a pager if stdout is a
  * terminal and $PAGER is set. Stdout is redirected to the pager.
  */

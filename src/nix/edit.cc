@@ -45,6 +45,8 @@ struct CmdEdit : InstallableValueCommand
 
         restoreProcessContext();
 
+        shutdownGC();
+
         execvp(args.front().c_str(), stringsToCharPtrs(args).data());
 
         std::string command;

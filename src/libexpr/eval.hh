@@ -130,9 +130,17 @@ std::ostream & operator << (std::ostream & os, const ValueType t);
 void initGC();
 
 /**
- * Shutdown the custom allocator, if applicable.
+ * Shutdown the custom allocator, if applicable. Only acts in the process
+ * that called initGC(). Must also be called before replacing the process
+ * with exec(), since atexit() handlers don't run then.
  */
 void shutdownGC();
+
+/**
+ * Like shutdownGC(), but only uses async-signal-safe calls, for use
+ * just before _exit() in a signal handler.
+ */
+void shutdownGCFromSignalHandler();
 
 struct RegexCache;
 

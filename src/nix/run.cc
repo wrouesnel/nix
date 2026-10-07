@@ -49,6 +49,8 @@ void runProgramInStore(ref<Store> store,
         Strings helperArgs = { chrootHelperName, store->storeDir, store2->getRealStoreDir(), std::string(system.value_or("")), program };
         for (auto & arg : args) helperArgs.push_back(arg);
 
+        shutdownGC();
+
         execv(getSelfExe().value_or("nix").c_str(), stringsToCharPtrs(helperArgs).data());
 
         throw SysError("could not execute chroot helper");
@@ -56,6 +58,8 @@ void runProgramInStore(ref<Store> store,
 
     if (system)
         setPersonality(*system);
+
+    shutdownGC();
 
     execvp(program.c_str(), stringsToCharPtrs(args).data());
 

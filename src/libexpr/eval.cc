@@ -49,6 +49,10 @@
 #if HAVE_METALL
 #include <metall/metall.hpp>
 #include <climits>
+#include <cstdio>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/mman.h>
 #if __linux__
 #include <sys/vfs.h>
 #include <sys/syscall.h>
@@ -69,6 +73,7 @@ namespace nix {
  * Global manageer for the metall allocator is defined here
  */
 metall::manager *manager;
+bool metallHeapInherited = false;
 #endif
 
 static char * allocString(size_t size)
@@ -77,7 +82,7 @@ static char * allocString(size_t size)
 #if HAVE_BOEHMGC
     t = (char *) GC_MALLOC_ATOMIC(size);
 #elif HAVE_METALL
-    t = (char *) manager->allocate(size);
+    t = (char *) metallManager()->allocate(size);
 #else
     t = (char *) malloc(size);
 #endif
@@ -124,7 +129,7 @@ RootValue allocRootValue(Value * v)
 #if HAVE_BOEHMGC
     return std::allocate_shared<Value *>(traceable_allocator<Value *>(), v);
 #elif HAVE_METALL
-    return std::allocate_shared<Value *>(manager->get_allocator<Value*>(), v);
+    return std::allocate_shared<Value *>(metallManager()->get_allocator<Value*>(), v);
 #else
     return std::make_shared<Value *>(v);
 #endif
@@ -422,13 +427,120 @@ public:
 static bool gcInitialised = false;
 
 #if HAVE_METALL
+/* The nix-eval-* directory created by initGC(). Each process that
+   allocates gets its own datastore in a subdirectory named after its
+   pid: the initGC() caller, and any fork()ed child (see
+   metallAtForkChild()). */
+static boost::filesystem::path diskRoot;
 static boost::filesystem::path diskCache;
 
-/* Copy of diskCache for shutdownGCFromSignalHandler(), which can't
-   touch the heap, and the process that created it. Forked children
-   inherit diskCache but must not delete it. */
+/* What shutdownGC() removes in this process: all of diskRoot in the
+   initGC() caller, only its own datastore in a child. Also kept as a C
+   string for shutdownGCFromSignalHandler(), which can't touch the heap,
+   with the pid it belongs to: a forked child inherits these but must not
+   delete its parent's datastore. */
+static boost::filesystem::path diskCleanup;
 static char diskCachePath[PATH_MAX];
 static pid_t diskCacheOwner = -1;
+
+static void setDiskCleanup(const boost::filesystem::path & path)
+{
+    diskCleanup = path;
+    diskCachePath[0] = 0;
+    if (path.string().size() < sizeof(diskCachePath))
+        strcpy(diskCachePath, path.c_str());
+    diskCacheOwner = getpid();
+}
+
+/* Runs in the child after fork(). The inherited datastore mappings are
+   MAP_SHARED, so anything the child writes would land in its parent's
+   heap, and the child's copy of the allocator state would hand out
+   addresses that the parent and any sibling also hand out. Remap them
+   copy-on-write instead: the child can still read everything allocated
+   before the fork, but its writes stay private. It gets a datastore of
+   its own on its first allocation, so children that just exec() don't
+   create one.
+
+   vfork() and posix_spawn() don't run fork handlers, and their children
+   share the parent's memory, so they must not (and don't) get here. */
+static void metallAtForkChild()
+{
+    if (diskRoot.empty()) return;
+
+    struct Mapping {
+        uintptr_t start, end;
+        int prot;
+        off_t offset;
+        std::string path;
+    };
+    std::vector<Mapping> inherited;
+
+    /* Find the mappings from /proc rather than relying on how Metall lays
+       out its datastore. Collect them all first, since remapping changes
+       /proc/self/maps. */
+    auto prefix = diskRoot.string() + "/";
+    FILE * maps = fopen("/proc/self/maps", "re");
+    if (!maps) {
+        perror("nix: reading /proc/self/maps after fork");
+        abort();
+    }
+    char * line = nullptr;
+    size_t lineSize = 0;
+    while (getline(&line, &lineSize, maps) != -1) {
+        unsigned long start, end, offset;
+        char perms[5];
+        int pathPos = 0;
+        if (sscanf(line, "%lx-%lx %4s %lx %*s %*s %n", &start, &end, perms, &offset, &pathPos) < 4 || !pathPos)
+            continue;
+        std::string path(line + pathPos);
+        while (!path.empty() && path.back() == '\n') path.pop_back();
+        if (perms[3] != 's' || path.compare(0, prefix.size(), prefix) != 0) continue;
+        int prot = (perms[0] == 'r' ? PROT_READ : 0) | (perms[1] == 'w' ? PROT_WRITE : 0) | (perms[2] == 'x' ? PROT_EXEC : 0);
+        inherited.push_back({start, end, prot, (off_t) offset, path});
+    }
+    free(line);
+    fclose(maps);
+
+    for (auto & m : inherited) {
+        int fd = open(m.path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd == -1
+            || mmap((void *) m.start, m.end - m.start, m.prot, MAP_PRIVATE | MAP_FIXED, fd, m.offset) != (void *) m.start)
+        {
+            /* Carrying on would corrupt the parent's heap. */
+            fprintf(stderr, "nix: cannot remap inherited Metall datastore '%s' after fork: %s\n", m.path.c_str(), strerror(errno));
+            abort();
+        }
+        close(fd);
+    }
+
+    metallHeapInherited = true;
+}
+
+void metallCreateChildHeap()
+{
+    metallHeapInherited = false;
+    auto pid = getpid();
+
+    /* Remove the datastores of earlier children that have exited without
+       cleaning up, e.g. nix-eval-jobs workers, which leave with _exit(). */
+    boost::system::error_code ec;
+    for (boost::filesystem::directory_iterator i(diskRoot, ec), end; !ec && i != end; i.increment(ec)) {
+        auto name = i->path().filename().string();
+        if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit)) continue;
+        auto other = (pid_t) strtol(name.c_str(), nullptr, 10);
+        if (other != pid && kill(other, 0) == -1 && errno == ESRCH) {
+            boost::system::error_code ec2;
+            boost::filesystem::remove_all(i->path(), ec2);
+        }
+    }
+
+    diskCache = diskRoot / std::to_string(pid);
+    boost::filesystem::create_directories(diskCache);
+    setDiskCleanup(diskCache);
+    /* The inherited manager is leaked on purpose: destroying it would
+       write its state back into the parent's datastore. */
+    manager = new metall::manager(metall::create_only, diskCache.c_str());
+}
 #endif
 
 void initGC()
@@ -492,18 +604,22 @@ void initGC()
        a disk-backed filesystem for memory to be paged out to it. */
     auto metallDir = getEnv("NIX_METALL_DIR");
     auto metallBase = metallDir ? boost::filesystem::path(*metallDir) : boost::filesystem::temp_directory_path();
-    diskCache = metallBase / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
+    diskRoot = metallBase / boost::filesystem::unique_path("nix-eval-%%%%-%%%%-%%%%-%%%%");
+    diskCache = diskRoot / std::to_string(getpid());
     boost::filesystem::create_directories(diskCache);
 #if __linux__
     struct statfs fs;
-    if (statfs(diskCache.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC))
+    if (statfs(diskRoot.c_str(), &fs) == 0 && (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC))
         warn("the Metall datastore '%s' is on a memory-backed filesystem, so evaluation memory cannot be paged out to disk; set NIX_METALL_DIR to a directory on disk",
-            diskCache.string());
+            diskRoot.string());
 #endif
-    if (diskCache.string().size() < sizeof(diskCachePath))
-        strcpy(diskCachePath, diskCache.c_str());
-    diskCacheOwner = getpid();
+    setDiskCleanup(diskRoot);
     manager = new metall::manager(metall::create_only, diskCache.c_str());
+
+    /* Registered here rather than by each program, so that programs
+       linking libnixexpr (e.g. nix-eval-jobs) clean up too. */
+    pthread_atfork(nullptr, nullptr, metallAtForkChild);
+    atexit(shutdownGC);
 #endif
 
     gcInitialised = true;
@@ -562,10 +678,10 @@ void shutdownGC()
     /**
      * Clean up the disk cache when exiting
      */
-    if (diskCache.empty() || getpid() != diskCacheOwner) return;
+    if (diskCleanup.empty() || getpid() != diskCacheOwner) return;
     boost::system::error_code ec;
-    boost::filesystem::remove_all(diskCache, ec);
-    diskCache.clear();
+    boost::filesystem::remove_all(diskCleanup, ec);
+    diskCleanup.clear();
     diskCachePath[0] = 0;
 #endif
 }
@@ -2704,12 +2820,12 @@ void EvalState::printStats()
         };
 #elif HAVE_METALL
         topObj["metall"] = {
-            {"anonymous_objects", manager->get_num_anonymous_objects()},
-            {"named_objects", manager->get_num_named_objects()},
-            {"unique_objects", manager->get_num_unique_objects()},
-            {"max_size", manager->get_size()},
-            {"datastore_uuid", manager->get_uuid()},
-            {"version", metall::to_version_string(manager->get_version())}
+            {"anonymous_objects", metallManager()->get_num_anonymous_objects()},
+            {"named_objects", metallManager()->get_num_named_objects()},
+            {"unique_objects", metallManager()->get_num_unique_objects()},
+            {"max_size", metallManager()->get_size()},
+            {"datastore_uuid", metallManager()->get_uuid()},
+            {"version", metall::to_version_string(metallManager()->get_version())}
         };
 #endif
 

@@ -1,6 +1,14 @@
 #pragma once
 ///@file
 
+/* Programs using the installed headers (e.g. nix-eval-jobs) may include
+   them before <nix/config.h>, leaving HAVE_METALL undefined in some
+   headers and defined in others. In-tree builds force-include config.h
+   from the top-level directory instead, where this doesn't find it. */
+#if __has_include("config.h")
+#include "config.h"
+#endif
+
 #include "ref.hh"
 
 #include <list>
@@ -19,6 +27,24 @@ namespace nix {
 
 #if HAVE_METALL
 extern metall::manager* manager;
+
+/**
+ * Set in a fork()ed child, whose heap is a copy-on-write view of its
+ * parent's. The child gets a datastore of its own on its first
+ * allocation.
+ */
+extern bool metallHeapInherited;
+void metallCreateChildHeap();
+
+/**
+ * The Metall manager this process should allocate from.
+ */
+inline metall::manager * metallManager()
+{
+    if (__builtin_expect(metallHeapInherited, false))
+        metallCreateChildHeap();
+    return manager;
+}
 #endif
 
 typedef std::list<std::string> Strings;

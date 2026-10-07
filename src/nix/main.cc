@@ -314,7 +314,6 @@ void mainWrapped(int argc, char * * argv)
 
     initNix();
     initGC();
-    atexit(shutdownGC);
     beforeShowManPage = shutdownGC;
     stackOverflowHandler = [](siginfo_t * info, void * ctx) {
         shutdownGCFromSignalHandler();

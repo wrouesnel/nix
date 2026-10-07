@@ -19,7 +19,7 @@ inline void * allocBytes(size_t n)
 #if HAVE_BOEHMGC
     p = GC_MALLOC(n);
 #elif HAVE_METALL
-    p = manager->allocate(n);
+    p = metallManager()->allocate(n);
     memset(p,0,n); // IMPORTANT: memory is expected to be zeroed!
 #else
     p = calloc(n, 1);

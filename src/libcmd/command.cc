@@ -116,7 +116,7 @@ ref<EvalState> EvalCommand::getEvalState()
             std::allocate_shared<EvalState>(traceable_allocator<EvalState>(),
                 searchPath, getEvalStore(), getStore())
             #elif HAVE_METALL
-            std::allocate_shared<EvalState>(manager->get_allocator<EvalState>(),
+            std::allocate_shared<EvalState>(metallManager()->get_allocator<EvalState>(),
                 searchPath, getEvalStore(), getStore())
             #else
             std::make_shared<EvalState>(

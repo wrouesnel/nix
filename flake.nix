@@ -188,7 +188,6 @@
             lowdown-nix
           ]
           ++ lib.optionals stdenv.isDarwin [darwin.apple_sdk.libs.sandbox]
-          ++ lib.optionals stdenv.isLinux [metall]
           ++ lib.optionals stdenv.isLinux [(libseccomp.overrideAttrs (_: rec {
             version = "2.5.5";
             src = fetchurl {
@@ -224,7 +223,10 @@
             })
             )
             nlohmann_json
-          ];
+          ]
+          # The installed headers include <metall/metall.hpp>, so programs
+          # built against them (e.g. nix-eval-jobs) need Metall too.
+          ++ lib.optionals stdenv.isLinux [metall];
       };
 
       installScriptFor = systems:
@@ -514,6 +516,10 @@
             src = metall-src;
 
             dontBuild = true;
+
+            # Metall is header-only and its headers include Boost's. Use the
+            # same Boost as Nix (see `boost` above).
+            propagatedBuildInputs = [ boost183 ];
 
             installPhase = ''
               runHook preInstall
